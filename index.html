@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>iPhone Tennis 3D</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#07131a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;touch-action:none}
+#game{position:fixed;inset:0}
+canvas{display:block}
+#hud{position:fixed;top:max(12px,env(safe-area-inset-top));left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;padding:0 14px;pointer-events:none;color:white;text-shadow:0 2px 5px #000}
+.card{background:rgba(0,0,0,.38);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.16);border-radius:14px;padding:8px 12px}
+#score{font-weight:700;font-size:17px;line-height:1.25}
+#status{font-size:12px;opacity:.9;margin-top:3px}
+#hint{position:fixed;left:50%;bottom:max(24px,env(safe-area-inset-bottom));transform:translateX(-50%);color:#fff;background:rgba(0,0,0,.48);padding:10px 15px;border-radius:20px;font-size:13px;white-space:nowrap;pointer-events:none}
+#serve{position:fixed;left:50%;bottom:max(78px,calc(env(safe-area-inset-bottom) + 54px));transform:translateX(-50%);border:0;border-radius:24px;padding:12px 22px;font-size:16px;font-weight:800;color:white;background:#1677ff;box-shadow:0 5px 18px rgba(0,0,0,.3);display:none}
+#serve:active{transform:translateX(-50%) scale(.96)}
+#start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(#07131acc,#07131af2);z-index:5}
+.panel{width:min(86vw,360px);text-align:center;color:white;background:rgba(12,24,31,.92);border:1px solid #ffffff22;border-radius:24px;padding:28px 22px;box-shadow:0 20px 70px #0008}
+.panel h1{margin:0 0 8px;font-size:30px}.panel p{opacity:.82;line-height:1.45}
+.panel button{margin-top:12px;border:0;border-radius:16px;padding:14px 24px;background:#1683ff;color:white;font-size:17px;font-weight:800}
+#message{position:fixed;top:48%;left:50%;transform:translate(-50%,-50%);color:#fff;font-size:28px;font-weight:900;text-shadow:0 3px 10px #000;pointer-events:none;opacity:0;transition:opacity .2s}
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="hud">
+  <div class="card"><div id="score">0 – 0</div><div id="status">Bereit</div></div>
+  <div class="card">Best of 3</div>
+</div>
+<div id="message"></div>
+<div id="hint">Wische in Richtung des Schlags, um den Ball zu spielen.</div>
+<button id="serve">AUFSCHLAG</button>
+<div id="start">
+  <div class="panel">
+    <h1>🎾 iPhone Tennis 3D</h1>
+    <p>Ein eigener 3D-Tennis-Prototyp mit normaler Tenniswertung.<br><br>
+    <b>Wischen</b> = Schlagrichtung &nbsp;•&nbsp; <b>kurzer Wisch</b> = sicher &nbsp;•&nbsp; <b>langer Wisch</b> = härter</p>
+    <button id="startBtn">SPIEL STARTEN</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.min.js"></script>
+<script>
+(() => {
+"use strict";
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8fd1ef);
+scene.fog = new THREE.Fog(0x8fd1ef, 28, 75);
+
+const camera = new THREE.PerspectiveCamera(58, innerWidth/innerHeight, .1, 120);
+camera.position.set(0, 7.8, 12.8);
+camera.lookAt(0, 0.7, 0);
+
+const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:"high-performance"});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.6));
+renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.getElementById("game").appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xdff5ff,0x4c6a38,2.0));
+const sun = new THREE.DirectionalLight(0xffffff,2.2);
+sun.position.set(-8,14,8); sun.castShadow=true; scene.add(sun);
+
+function mat(c, rough=1){return new THREE.MeshStandardMaterial({color:c,roughness:rough});}
+const courtMat=mat(0x176b9e), lineMat=mat(0xffffff), darkMat=mat(0x0b1720), netMat=new THREE.MeshStandardMaterial({color:0xdddddd,transparent:true,opacity:.68});
+function box(x,y,z,px,py,pz,m){const o=new THREE.Mesh(new THREE.BoxGeometry(x,y,z),m);o.position.set(px,py,pz);o.receiveShadow=true;o.castShadow=true;scene.add(o);return o;}
+
+box(13.5,.12,27,0,-.06,0,courtMat);
+box(15,.18,28.5,0,-.18,0,darkMat);
+
+// Tennis lines: court 10.97m x 23.77m (scaled visually)
+const lines=[
+  [10.97,.045,.10,0,.01,-11.885],[10.97,.045,.10,0,.01,11.885],
+  [.10,.045,23.77,-5.485,.01,0],[.10,.045,23.77,5.485,.01,0],
+  [8.23,.045,.08,0,.012,-11.885],[8.23,.045,.08,0,.012,11.885],
+  [.07,.045,23.77,-4.115,.012,0],[.07,.045,23.77,4.115,.012,0],
+  [8.23,.045,.07,0,.012,-6.40],[8.23,.045,.07,0,.012,6.40],
+  [.07,.045,12.8,0,.012,0]
+];
+for(const [x,y,z,px,py,pz] of lines) box(x,y,z,px,py,pz,lineMat);
+box(11.1,.10,.10,0,.01,0,lineMat);
+
+// net
+box(.06,1.0,.06,0,.5,0,darkMat);
+const net=new THREE.Mesh(new THREE.PlaneGeometry(11.0,1.0,22,4),netMat);
+net.rotation.y=Math.PI/2; net.position.y=.52; scene.add(net);
+for(let x=-5.5;x<=5.5;x+=1) box(.025,.98,.025,x,.5,0,netMat);
+
+// simple environment
+const sideMat=mat(0x315b3d);
+box(22,.15,2,0,-.05,-15,sideMat); box(22,.15,2,0,-.05,15,sideMat);
+for(let x=-10;x<=10;x+=5){
+  const trunk=box(.22,1.6,.22,x,.8,-16,mat(0x65432c));
+  const crown=new THREE.Mesh(new THREE.SphereGeometry(1.25,12,8),mat(0x2d7d3f)); crown.position.set(x,2,-16); crown.castShadow=true;scene.add(crown);
+}
+
+function player(color, z){
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(new THREE.CapsuleGeometry(.42,1.05,6,10),mat(color)); body.position.y=1.15; body.castShadow=true;g.add(body);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(.29,14,10),mat(0xf0c6a4));head.position.y=1.95;head.castShadow=true;g.add(head);
+  const legMat=mat(0xeeeeee);
+  for(const sx of [-.18,.18]){const leg=box(.18,.72,.18,sx,.42,0,legMat);g.add(leg)}
+  const racket=new THREE.Group();
+  const grip=box(.10,.65,.10,.0,.0,.0,mat(0x222222)); grip.position.y=.15; racket.add(grip);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(.38,.045,8,20),mat(0xe9e9e9));ring.position.y=.58; racket.add(ring);
+  racket.rotation.x=-.35; racket.rotation.z=-.15; racket.position.set(.5,1.0,.05);g.add(racket);
+  g.position.set(0,0,z); scene.add(g); return {g,racket};
+}
+const me=player(0x1677ff,8.7), ai=player(0xe94d5a,-8.7);
+ai.g.rotation.y=Math.PI;
+
+const ball=new THREE.Mesh(new THREE.SphereGeometry(.105,12,12),mat(0xd9f542,.6));
+ball.castShadow=true;scene.add(ball);
+
+const state={
+  phase:"start", server:0, hitter:0, ballVel:new THREE.Vector3(), last:0,
+  pointInPlay:false, bounce:0, rally:0, score:null, aiTimer:0
+};
+
+class Score {
+  constructor(){this.games=[0,0];this.sets=[0,0];this.points=[0,0];this.tb=false;this.tbPoints=[0,0];}
+  point(w){
+    if(this.tb){this.tbPoints[w]++; if(this.tbPoints[w]>=7 && this.tbPoints[w]-this.tbPoints[1-w]>=2)return this.finishSet(w); return;}
+    const p=this.points;
+    if(p[0]>=3 && p[1]>=3){
+      if(p[0]===p[1]) p[w]=4;
+      else if(p[w]===4) return this.finishGame(w);
+      else p[1-w]=3;
+    } else {
+      p[w]++;
+      if(p[w]>=4)return this.finishGame(w);
+    }
+  }
+  finishGame(w){
+    this.games[w]++;this.points=[0,0];
+    if(this.games[w]>=6 && this.games[w]-this.games[1-w]>=2)return this.finishSet(w);
+    if(this.games[0]===6&&this.games[1]===6){this.tb=true;this.tbPoints=[0,0];}
+  }
+  finishSet(w){
+    this.sets[w]++;this.games=[0,0];this.points=[0,0];this.tb=false;this.tbPoints=[0,0];
+    if(this.sets[w]>=2){state.phase="matchover";}
+  }
+  pointText(){
+    if(this.tb)return `Tiebreak ${this.tbPoints[0]}–${this.tbPoints[1]}`;
+    const names=["0","15","30","40","A"];
+    if(this.points[0]>=3&&this.points[1]>=3){
+      if(this.points[0]===this.points[1])return "Deuce";
+      return this.points[0]===4?"Vorteil Du":"Vorteil Du";
+    }
+    return `${names[this.points[0]]} – ${names[this.points[1]]}`;
+  }
+  gameText(){return `${this.games[0]} – ${this.games[1]}`;}
+  setText(){return `${this.sets[0]} – ${this.sets[1]}`;}
+}
+state.score=new Score();
+
+function ui(){
+  const s=state.score;
+  document.getElementById("score").textContent=`${s.pointText()}   |   ${s.gameText()}   |   ${s.setText()}`;
+  document.getElementById("status").textContent=state.phase==="matchover"?"Match beendet":(state.server===0?"Du schlägst auf":"Gegner schlägt auf");
+}
+function message(t){
+  const el=document.getElementById("message");el.textContent=t;el.style.opacity=1;
+  clearTimeout(message.t);message.t=setTimeout(()=>el.style.opacity=0,800);
+}
+function resetBall(){
+  const z=state.hitter===0?7.2:-7.2;
+  ball.position.set(state.hitter===0?me.g.position.x:ai.g.position.x,.9,z);
+  state.ballVel.set(0,0,0);state.bounce=0;state.pointInPlay=false;
+}
+function startPoint(){
+  if(state.phase==="matchover")return;
+  state.hitter=state.server;
+  resetBall();
+  document.getElementById("serve").style.display="block";
+  document.getElementById("hint").textContent=state.hitter===0?"Drücke AUFSCHLAG und wische zum Schlag.":"Der Gegner schlägt auf…";
+  if(state.hitter===1){document.getElementById("serve").style.display="none";setTimeout(aiServe,700);}
+}
+function serve(){
+  if(state.hitter!==0)return;
+  document.getElementById("serve").style.display="none";
+  const targetX=(Math.random()-.5)*4.5;
+  ball.position.set(me.g.position.x,.95,7.0);
+  state.ballVel.set((targetX-ball.position.x)*.7,5.2,-12.2);
+  state.pointInPlay=true;state.bounce=0;state.rally=0;
+}
+function aiServe(){
+  if(state.phase==="matchover")return;
+  document.getElementById("serve").style.display="none";
+  ball.position.set(ai.g.position.x,.95,-7);
+  state.ballVel.set((Math.random()-.5)*2.2,5.0,12.2);
+  state.pointInPlay=true;state.bounce=0;state.rally=0;
+}
+document.getElementById("serve").onclick=serve;
+
+let swipe={active:false,x:0,y:0,t:0};
+renderer.domElement.addEventListener("touchstart",e=>{
+  const t=e.changedTouches[0];swipe={active:true,x:t.clientX,y:t.clientY,t:performance.now()};e.preventDefault();
+},{passive:false});
+renderer.domElement.addEventListener("touchend",e=>{
+  if(!swipe.active)return;const t=e.changedTouches[0];const dx=t.clientX-swipe.x,dy=t.clientY-swipe.y;
+  const len=Math.hypot(dx,dy);swipe.active=false;
+  if(len<12)return;
+  hit(dx,dy,len);
+  e.preventDefault();
+},{passive:false});
+
+function hit(dx,dy,len){
+  if(state.phase==="matchover"||!state.pointInPlay||state.hitter!==0)return;
+  const p=me.g.position;
+  if(ball.position.distanceTo(new THREE.Vector3(p.x,1.0,p.z))>4.0)return;
+  const power=Math.min(1.6,Math.max(.55,len/120));
+  const side=Math.max(-5,Math.min(5,dx/45));
+  const forward=Math.max(6,Math.min(15,-dy/12));
+  state.ballVel.set(side*power,4.2+power*1.5,-forward*power);
+  state.rally++;
+  state.hitter=1;
+  message(power>1.25?"HART!":"SCHLAG");
+}
+function aiHit(){
+  if(!state.pointInPlay||state.hitter!==1)return;
+  const targetX=(Math.random()-.5)*7.2;
+  const p=ai.g.position;
+  state.ballVel.set((targetX-ball.position.x)*.45,4.4,-(7.5+Math.random()*4));
+  state.rally++;state.hitter=0;
+}
+function winPoint(w){
+  state.pointInPlay=false;state.score.point(w);
+  message(w===0?"PUNKT FÜR DICH":"PUNKT FÜR GEGNER");
+  ui();
+  if(state.phase==="matchover"){
+    document.getElementById("hint").textContent=state.score.sets[0]>state.score.sets[1]?"DU GEWINNST!":"GEGNER GEWINNT";
+    document.getElementById("serve").style.display="none";return;
+  }
+  state.server=1-state.server;setTimeout(startPoint,900);
+}
+
+let last=performance.now();
+function animate(now){
+  requestAnimationFrame(animate);
+  const dt=Math.min(.035,(now-last)/1000);last=now;
+
+  // Player movement toward projected ball.
+  if(state.pointInPlay){
+    const targetX=Math.max(-4.8,Math.min(4.8,ball.position.x));
+    const active=state.hitter===0?me:ai;
+    active.g.position.x += (targetX-active.g.position.x)*Math.min(1,dt*4.2);
+    if(state.hitter===1) ai.g.position.z += (-7.2-ai.g.position.z)*Math.min(1,dt*2.5);
+    else me.g.position.z += (7.2-me.g.position.z)*Math.min(1,dt*2.5);
+  }
+
+  if(state.pointInPlay){
+    state.ballVel.y -= 12*dt;
+    ball.position.addScaledVector(state.ballVel,dt);
+    if(ball.position.y<.13){
+      ball.position.y=.13;state.ballVel.y=Math.abs(state.ballVel.y)*.72;state.bounce++;
+      if(state.bounce>=2){
+        // If ball lands on opponent side, hitter wins; otherwise receiver wins.
+        const w=ball.position.z>0?0:1;winPoint(w);
+      } else {
+        if(state.hitter===1)setTimeout(aiHit,180);
+        else {
+          // If player misses the incoming ball, AI gets the point.
+          if(ball.position.z>1.5)setTimeout(()=>{if(state.pointInPlay&&state.hitter===0)winPoint(1)},450);
+        }
+      }
+    }
+    // Out / net
+    if(Math.abs(ball.position.x)>5.7 || Math.abs(ball.position.z)>13 || (Math.abs(ball.position.z)<.12 && ball.position.y<1.15)){
+      winPoint(state.hitter===0?1:0);
+    }
+  }
+
+  camera.position.x += (me.g.position.x*.18-camera.position.x)*dt*2;
+  camera.lookAt(me.g.position.x*.12,.7,0);
+  renderer.render(scene,camera);
+}
+document.getElementById("startBtn").onclick=()=>{
+  document.getElementById("start").style.display="none";
+  state.phase="playing";state.server=0;ui();startPoint();
+};
+addEventListener("resize",()=>{
+  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio,1.6));
+});
+ui();requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>
